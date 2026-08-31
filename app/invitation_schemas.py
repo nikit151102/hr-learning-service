@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
-
+from typing import Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.invitation_models import InvitationStatus
@@ -65,7 +65,7 @@ class InvitationRead(BaseModel):
     invitation_code: str
     status: InvitationStatus
     requested_by_id_max: Optional[str]
-    invited_by: Optional[UUID]
+    invited_by: Optional[UUID] = None
     approved_by: Optional[UUID]
     role: str
     department: Optional[str]
