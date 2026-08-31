@@ -24,7 +24,7 @@ from app.models import User, UserRole
 from app.notifications import router as notifications_router
 from app.services import minio_service
 from app.swagger_ru import apply_russian_docs
-
+from app.invitations import router as invitations_router
 
 UUID_REGEX = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -99,6 +99,10 @@ tags_metadata = [
     {
         "name": "Аудит",
         "description": "Журнал действий пользователей и администраторов.",
+    },
+        {
+        "name": "Приглашения",
+        "description": "Управление приглашениями для новых пользователей.",
     },
 ]
 
@@ -257,6 +261,7 @@ app.include_router(certificates_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(management_router, prefix="/api/v1")
 app.include_router(audit_router, prefix="/api/v1")
+app.include_router(invitations_router, prefix="/api/v1")
 
 apply_russian_docs(app)
 
