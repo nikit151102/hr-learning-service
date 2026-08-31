@@ -16,6 +16,7 @@ from app.schemas import (
 )
 
 
+
 # ==================== ANALYTICS ====================
 
 class AnalyticsSummary(BaseModel):
@@ -400,3 +401,28 @@ class MyDashboard(BaseModel):
     assignments_in_progress: int = Field(description="Назначения в работе")
     assignments_overdue: int = Field(description="Просроченные назначения")
     feedback_count: int = Field(description="Сколько отзывов оставлено")
+
+
+class AssignmentDetailRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    user_name: str | None
+    user_id_max: str | None
+    material_id: UUID | None
+    test_id: UUID | None
+    status: AssignmentStatus
+    due_date: datetime | None
+    note: str | None
+    created_at: datetime
+    completed_at: datetime | None
+    
+    # Детальная информация
+    material_viewed: bool
+    material_viewed_at: datetime | None
+    test_passed: bool
+    test_passed_at: datetime | None
+    test_score: int | None
+    test_max_score: int | None
+    test_grade: str | None

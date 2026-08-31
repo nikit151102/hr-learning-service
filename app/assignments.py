@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db.session import get_db
 from app.deps import HRRequired, get_current_user, get_or_404, paginate
@@ -13,6 +13,7 @@ from app.ext_schemas import (
     AssignmentCreate,
     AssignmentRead,
     AssignmentUpdate,
+    AssignmentDetailRead,
 )
 from app.models import (
     AttemptStatus,
@@ -24,6 +25,7 @@ from app.models import (
     UserRole,
 )
 from app.schemas import Page
+from app.services.max_notification_service import max_notification_service
 
 
 router = APIRouter(prefix="/assignments", tags=["Назначения"])
@@ -67,11 +69,14 @@ def create_assignment(
     if not user.is_active:
         raise HTTPException(status_code=422, detail="Пользователь неактивен")
 
+    material = None
+    test = None
+
     if payload.material_id:
-        get_or_404(db, Material, payload.material_id)
+        material = get_or_404(db, Material, payload.material_id)
 
     if payload.test_id:
-        get_or_404(db, Test, payload.test_id)
+        test = get_or_404(db, Test, payload.test_id)
 
     assignment = Assignment(
         user_id=payload.user_id,
@@ -86,6 +91,19 @@ def create_assignment(
     db.add(assignment)
     db.commit()
     db.refresh(assignment)
+
+    # Отправляем уведомление пользователю
+    due_date_str = None
+    if payload.due_date:
+        due_date_str = payload.due_date.strftime("%d.%m.%Y")
+
+    max_notification_service.send_assignment_notification(
+        user=user,
+        material=material,
+        test=test,
+        due_date=due_date_str,
+        note=payload.note
+    )
 
     return assignment
 
@@ -102,11 +120,14 @@ def bulk_assign(
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
+    material = None
+    test = None
+
     if payload.material_id:
-        get_or_404(db, Material, payload.material_id)
+        material = get_or_404(db, Material, payload.material_id)
 
     if payload.test_id:
-        get_or_404(db, Test, payload.test_id)
+        test = get_or_404(db, Test, payload.test_id)
 
     users = (
         db.query(User)
@@ -137,6 +158,19 @@ def bulk_assign(
         )
 
     db.commit()
+
+    # Отправляем массовое уведомление
+    due_date_str = None
+    if payload.due_date:
+        due_date_str = payload.due_date.strftime("%d.%m.%Y")
+
+    max_notification_service.send_bulk_assignment_notification(
+        users=users,
+        material=material,
+        test=test,
+        due_date=due_date_str,
+        note=payload.note
+    )
 
     return {"created": len(users)}
 
@@ -199,6 +233,85 @@ def get_assignment(
         raise HTTPException(status_code=403, detail="Недостаточно прав")
 
     return assignment
+
+
+@router.get(
+    "/{assignment_id}/detail",
+    response_model=AssignmentDetailRead,
+    summary="Детальная информация о назначении",
+    description="Полная информация с проверкой просмотра материала и прохождения теста.",
+)
+def get_assignment_detail(
+    assignment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    assignment = get_or_404(db, Assignment, assignment_id)
+
+    # Получаем пользователя
+    user = db.query(User).filter(User.id == assignment.user_id).first()
+
+    # Проверяем просмотр материала
+    material_viewed = False
+    material_viewed_at = None
+    if assignment.material_id:
+        view = (
+            db.query(MaterialView)
+            .filter(
+                MaterialView.material_id == assignment.material_id,
+                MaterialView.user_id == assignment.user_id,
+            )
+            .order_by(MaterialView.viewed_at.desc())
+            .first()
+        )
+        if view:
+            material_viewed = True
+            material_viewed_at = view.viewed_at
+
+    # Проверяем прохождение теста
+    test_passed = False
+    test_passed_at = None
+    test_score = None
+    test_max_score = None
+    test_grade = None
+    if assignment.test_id:
+        attempt = (
+            db.query(TestAttempt)
+            .filter(
+                TestAttempt.test_id == assignment.test_id,
+                TestAttempt.user_id == assignment.user_id,
+                TestAttempt.status == AttemptStatus.completed,
+            )
+            .order_by(TestAttempt.completed_at.desc())
+            .first()
+        )
+        if attempt:
+            test_passed = attempt.passed or False
+            test_passed_at = attempt.completed_at
+            test_score = attempt.score
+            test_max_score = attempt.max_score
+            test_grade = attempt.grade_name
+
+    return {
+        "id": assignment.id,
+        "user_id": assignment.user_id,
+        "user_name": user.full_name if user else None,
+        "user_id_max": user.id_max if user else None,
+        "material_id": assignment.material_id,
+        "test_id": assignment.test_id,
+        "status": assignment.status,
+        "due_date": assignment.due_date,
+        "note": assignment.note,
+        "created_at": assignment.created_at,
+        "completed_at": assignment.completed_at,
+        "material_viewed": material_viewed,
+        "material_viewed_at": material_viewed_at,
+        "test_passed": test_passed,
+        "test_passed_at": test_passed_at,
+        "test_score": test_score,
+        "test_max_score": test_max_score,
+        "test_grade": test_grade,
+    }
 
 
 @router.patch(
