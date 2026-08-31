@@ -17,7 +17,7 @@ from app.invitation_schemas import (
     InvitationApprove,
     InvitationReject,
 )
-from app.invitation_service import (
+from app.services.invitation_service import (
     accept_approved_invitation,
     approve_invitation,
     get_invitation_by_id_max,
