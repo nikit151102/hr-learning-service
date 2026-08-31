@@ -10,3 +10,4 @@ alembic>=1.13
 reportlab>=4.2
 apscheduler>=3.10
 pydantic[email]
+maxapi
