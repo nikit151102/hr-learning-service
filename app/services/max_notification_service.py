@@ -4,6 +4,8 @@ import os
 from typing import Optional
 
 from maxapi import Bot
+from maxapi.types import CallbackButton, Attachment, ButtonsPayload
+from maxapi.enums.intent import Intent
 
 from app.models import Material, Test, User
 
@@ -24,28 +26,36 @@ class MaxNotificationService:
         else:
             logger.warning("⚠️ MAX_BOT_TOKEN не установлен, уведомления отключены")
 
-    async def _send_message(self, user_id_max: str, text: str) -> bool:
+    async def _send_message(
+        self, 
+        user_id_max: str, 
+        text: str,
+        attachments: list[Attachment] | None = None
+    ) -> bool:
         """Отправляет сообщение пользователю через MAX"""
         if not self.bot:
             logger.warning("⚠️ MAX Bot не инициализирован")
             return False
 
         try:
-            # Пробуем преобразовать id_max в число (если это числовой ID из MAX)
             try:
                 max_user_id = int(user_id_max)
                 logger.info(f"📤 Отправка сообщения пользователю {max_user_id}")
                 
-                response = await self.bot.send_message(
-                    user_id=max_user_id,
-                    text=text
-                )
+                kwargs = {
+                    "user_id": max_user_id,
+                    "text": text
+                }
+                
+                if attachments:
+                    kwargs["attachments"] = attachments
+                
+                response = await self.bot.send_message(**kwargs)
                 logger.info(f"✅ Сообщение успешно отправлено пользователю {max_user_id}")
                 logger.debug(f"Ответ сервера: {response}")
                 return True
                 
             except ValueError:
-                # Если id_max не число (например "admin1"), логируем ошибку
                 logger.error(
                     f"❌ Невозможно отправить уведомление: id_max '{user_id_max}' "
                     f"не является числовым идентификатором MAX"
@@ -66,7 +76,7 @@ class MaxNotificationService:
         due_date: Optional[str] = None,
         note: Optional[str] = None
     ):
-        """Отправляет уведомление о новом назначении"""
+        """Отправляет уведомление о новом назначении с кнопками"""
         if not self.bot:
             logger.warning("⚠️ MAX Bot не инициализирован, уведомление не отправлено")
             return
@@ -75,9 +85,13 @@ class MaxNotificationService:
         if material:
             object_type = "материал"
             object_title = material.title
+            object_id = material.id
+            is_material = True
         elif test:
             object_type = "тест"
             object_title = test.title
+            object_id = test.id
+            is_material = False
         else:
             logger.warning("⚠️ Не указан материал или тест для уведомления")
             return
@@ -94,15 +108,46 @@ class MaxNotificationService:
         if note:
             text += f"💬 Комментарий: {note}\n\n"
 
-        text += (
-            f"Откройте бота, чтобы начать выполнение.\n\n"
-            f"Удачи! 🚀"
+        text += f"Нажмите кнопку ниже, чтобы начать:\n"
+
+        # Создаем кнопки
+        buttons = []
+        
+        if is_material:
+            buttons.append([
+                CallbackButton(
+                    text="📄 Открыть материал",
+                    payload=f"assignment_material_{object_id}",
+                    intent=Intent.DEFAULT
+                )
+            ])
+        else:
+            buttons.append([
+                CallbackButton(
+                    text="📝 Начать тест",
+                    payload=f"assignment_test_{object_id}",
+                    intent=Intent.DEFAULT
+                )
+            ])
+        
+        # Добавляем кнопку "Мои назначения"
+        buttons.append([
+            CallbackButton(
+                text="📋 Мои назначения",
+                payload="menu_assignments",
+                intent=Intent.DEFAULT
+            )
+        ])
+
+        attachment = Attachment(
+            type="inline_keyboard",
+            payload=ButtonsPayload(buttons=buttons)
         )
 
         logger.info(f"📨 Подготовка уведомления для пользователя {user.id_max}")
         logger.debug(f"Текст уведомления:\n{text}")
 
-        await self._send_message(user.id_max, text)
+        await self._send_message(user.id_max, text, [attachment])
 
     async def send_bulk_assignment_notification(
         self,
