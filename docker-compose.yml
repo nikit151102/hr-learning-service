@@ -1,5 +1,5 @@
 services:
-  db:
+  learning_db:
     image: postgres:16
     environment:
       POSTGRES_USER: hr
@@ -22,8 +22,8 @@ services:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9070:9070"
+      - "9071:9071"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -37,12 +37,12 @@ services:
     env_file:
       - .env
     depends_on:
-      db:
+      learning_db:
         condition: service_healthy
       minio:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "7110:7110"
 
 volumes:
   pgdata:

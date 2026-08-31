@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str
 
-    minio_endpoint: str = "localhost:9000"
+    minio_endpoint: str = "localhost:9070"
     minio_public_endpoint: str | None = None
     minio_access_key: str = "minio"
     minio_secret_key: str = "minio123"
