@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.invitation_models import Invitation, InvitationStatus
@@ -12,7 +11,6 @@ from app.models import User, UserRole
 
 
 def generate_invitation_code() -> str:
-    """Генерирует уникальный код приглашения"""
     return secrets.token_urlsafe(32)
 
 
@@ -28,7 +26,7 @@ def request_invitation(
 ) -> Invitation:
     """Пользователь запрашивает приглашение через бота"""
 
-    # Проверяем, нет ли уже активного запроса для этого id_max
+    # Проверяем, нет ли активного запроса
     existing = (
         db.query(Invitation)
         .filter(
@@ -47,9 +45,8 @@ def request_invitation(
             detail=f"У вас уже есть активное приглашение (статус: {existing.status.value})",
         )
 
-    # Проверяем, нет ли уже пользователя с таким id_max
+    # Проверяем, не зарегистрирован ли уже пользователь
     existing_user = db.query(User).filter(User.id_max == id_max).first()
-
     if existing_user:
         raise HTTPException(
             status_code=409,
@@ -85,7 +82,11 @@ def approve_invitation(
     role: Optional[str] = None,
     department: Optional[str] = None,
 ) -> Invitation:
-    """Админ подтверждает приглашение"""
+    """
+    Админ подтверждает приглашение.
+    
+    ⭐ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: При подтверждении СРАЗУ создаётся пользователь.
+    """
 
     invitation = db.query(Invitation).filter(Invitation.id == invitation_id).first()
 
@@ -103,14 +104,47 @@ def approve_invitation(
         db.commit()
         raise HTTPException(status_code=410, detail="Приглашение истекло")
 
-    invitation.status = InvitationStatus.approved
+    # Проверяем, не создан ли уже пользователь (двойная проверка)
+    if not invitation.id_max:
+        raise HTTPException(
+            status_code=422,
+            detail="У приглашения нет id_max, невозможно создать пользователя",
+        )
+
+    existing_user = db.query(User).filter(User.id_max == invitation.id_max).first()
+    if existing_user:
+        # Пользователь уже существует - просто отмечаем как принятое
+        invitation.status = InvitationStatus.accepted
+        invitation.approved_by = approved_by
+        invitation.approved_at = datetime.now(timezone.utc)
+        invitation.accepted_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(invitation)
+        return invitation
+
+    # Определяем финальную роль и отдел
+    final_role = role or invitation.role or "employee"
+    final_department = department or invitation.department
+
+    # ⭐ Создаём пользователя СРАЗУ
+    user = User(
+        id_max=invitation.id_max,
+        full_name=invitation.full_name,
+        role=UserRole(final_role),
+        is_active=True,
+    )
+    db.add(user)
+
+    # Обновляем приглашение
+    invitation.status = InvitationStatus.accepted  # сразу accepted, не approved
     invitation.approved_by = approved_by
     invitation.approved_at = datetime.now(timezone.utc)
+    invitation.accepted_at = datetime.now(timezone.utc)
 
     if role:
-        invitation.role = role
+        invitation.role = final_role
     if department:
-        invitation.department = department
+        invitation.department = final_department
 
     db.commit()
     db.refresh(invitation)
@@ -146,69 +180,6 @@ def reject_invitation(
     return invitation
 
 
-def accept_approved_invitation(
-    db: Session,
-    code: str,
-    id_max: str,
-) -> User:
-    """Пользователь принимает подтверждённое приглашение"""
-
-    invitation = (
-        db.query(Invitation)
-        .filter(Invitation.invitation_code == code)
-        .first()
-    )
-
-    if not invitation:
-        raise HTTPException(status_code=404, detail="Приглашение не найдено")
-
-    if invitation.status != InvitationStatus.approved:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Приглашение должно быть подтверждено администратором (текущий статус: {invitation.status.value})",
-        )
-
-    if invitation.is_expired():
-        invitation.status = InvitationStatus.expired
-        db.commit()
-        raise HTTPException(status_code=410, detail="Приглашение истекло")
-
-    # Проверяем соответствие id_max
-    if invitation.id_max != id_max:
-        raise HTTPException(
-            status_code=403,
-            detail="Приглашение не принадлежит этому пользователю",
-        )
-
-    # Проверяем, не создан ли уже пользователь
-    existing_user = db.query(User).filter(User.id_max == id_max).first()
-
-    if existing_user:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Пользователь с id_max={id_max} уже существует",
-        )
-
-    # Создаём пользователя
-    user = User(
-        id_max=id_max,
-        full_name=invitation.full_name,
-        role=UserRole(invitation.role),
-        is_active=True,
-    )
-
-    db.add(user)
-
-    # Обновляем приглашение
-    invitation.status = InvitationStatus.accepted
-    invitation.accepted_at = datetime.now(timezone.utc)
-
-    db.commit()
-    db.refresh(user)
-
-    return user
-
-
 def get_invitation_by_id_max(
     db: Session,
     id_max: str,
@@ -228,8 +199,6 @@ def list_invitations(
     page: int = 1,
     size: int = 20,
 ) -> tuple[list[Invitation], int]:
-    """Возвращает список приглашений с пагинацией"""
-
     query = db.query(Invitation)
 
     if status:
