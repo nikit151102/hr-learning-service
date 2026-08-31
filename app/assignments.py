@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session, joinedload
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.deps import HRRequired, get_current_user, get_or_404, paginate
@@ -31,27 +31,6 @@ from app.services.max_notification_service import max_notification_service
 router = APIRouter(prefix="/assignments", tags=["Назначения"])
 
 
-@router.get(
-    "/me",
-    response_model=Page[AssignmentRead],
-    summary="Мои назначения",
-    description="Список назначений текущего пользователя.",
-)
-def my_assignments(
-    page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    query = (
-        db.query(Assignment)
-        .filter(Assignment.user_id == current_user.id)
-        .order_by(Assignment.created_at.desc())
-    )
-
-    return paginate(query, page, size)
-
-
 @router.post(
     "",
     response_model=AssignmentRead,
@@ -59,8 +38,9 @@ def my_assignments(
     summary="Создать назначение",
     description="Назначить пользователю материал или тест.",
 )
-def create_assignment(
+async def create_assignment(
     payload: AssignmentCreate,
+    background_tasks: BackgroundTasks,  # ← Добавляем BackgroundTasks
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
@@ -92,12 +72,14 @@ def create_assignment(
     db.commit()
     db.refresh(assignment)
 
-    # Отправляем уведомление пользователю
+    # Отправляем уведомление в фоновой задаче
     due_date_str = None
     if payload.due_date:
         due_date_str = payload.due_date.strftime("%d.%m.%Y")
 
-    max_notification_service.send_assignment_notification(
+    # Используем BackgroundTasks для асинхронной отправки
+    background_tasks.add_task(
+        max_notification_service.send_assignment_notification,
         user=user,
         material=material,
         test=test,
@@ -115,8 +97,9 @@ def create_assignment(
     summary="Массовое назначение",
     description="Назначить один материал или тест сразу нескольким активным пользователям.",
 )
-def bulk_assign(
+async def bulk_assign(
     payload: AssignmentBulkCreate,
+    background_tasks: BackgroundTasks,  # ← Добавляем BackgroundTasks
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
@@ -159,12 +142,13 @@ def bulk_assign(
 
     db.commit()
 
-    # Отправляем массовое уведомление
+    # Отправляем массовое уведомление в фоновой задаче
     due_date_str = None
     if payload.due_date:
         due_date_str = payload.due_date.strftime("%d.%m.%Y")
 
-    max_notification_service.send_bulk_assignment_notification(
+    background_tasks.add_task(
+        max_notification_service.send_bulk_assignment_notification,
         users=users,
         material=material,
         test=test,

@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from typing import Optional
-from uuid import UUID
 
 from maxapi import Bot
 
@@ -19,31 +18,47 @@ class MaxNotificationService:
         if self.bot_token:
             try:
                 self.bot = Bot(self.bot_token)
-                logger.info("MAX Bot инициализирован для уведомлений")
+                logger.info("✅ MAX Bot инициализирован для уведомлений")
             except Exception as e:
-                logger.error(f"Ошибка инициализации MAX Bot: {e}")
+                logger.error(f"❌ Ошибка инициализации MAX Bot: {e}")
         else:
-            logger.warning("MAX_BOT_TOKEN не установлен, уведомления отключены")
+            logger.warning("⚠️ MAX_BOT_TOKEN не установлен, уведомления отключены")
 
     async def _send_message(self, user_id_max: str, text: str) -> bool:
         """Отправляет сообщение пользователю через MAX"""
         if not self.bot:
-            logger.warning("MAX Bot не инициализирован")
+            logger.warning("⚠️ MAX Bot не инициализирован")
             return False
 
         try:
-            # user_id_max это и есть user_id в MAX
-            response = await self.bot.send_message(
-                user_id=int(user_id_max),
-                text=text
-            )
-            logger.info(f"Сообщение отправлено пользователю {user_id_max}")
-            return True
+            # Пробуем преобразовать id_max в число (если это числовой ID из MAX)
+            try:
+                max_user_id = int(user_id_max)
+                logger.info(f"📤 Отправка сообщения пользователю {max_user_id}")
+                
+                response = await self.bot.send_message(
+                    user_id=max_user_id,
+                    text=text
+                )
+                logger.info(f"✅ Сообщение успешно отправлено пользователю {max_user_id}")
+                logger.debug(f"Ответ сервера: {response}")
+                return True
+                
+            except ValueError:
+                # Если id_max не число (например "admin1"), логируем ошибку
+                logger.error(
+                    f"❌ Невозможно отправить уведомление: id_max '{user_id_max}' "
+                    f"не является числовым идентификатором MAX"
+                )
+                return False
+                
         except Exception as e:
-            logger.error(f"Ошибка отправки сообщения пользователю {user_id_max}: {e}")
+            logger.error(f"❌ Ошибка отправки сообщения пользователю {user_id_max}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
-    def send_assignment_notification(
+    async def send_assignment_notification(
         self,
         user: User,
         material: Optional[Material] = None,
@@ -53,6 +68,7 @@ class MaxNotificationService:
     ):
         """Отправляет уведомление о новом назначении"""
         if not self.bot:
+            logger.warning("⚠️ MAX Bot не инициализирован, уведомление не отправлено")
             return
 
         # Формируем текст уведомления
@@ -63,6 +79,7 @@ class MaxNotificationService:
             object_type = "тест"
             object_title = test.title
         else:
+            logger.warning("⚠️ Не указан материал или тест для уведомления")
             return
 
         text = (
@@ -72,20 +89,22 @@ class MaxNotificationService:
         )
 
         if due_date:
-            text += f"Срок выполнения: {due_date}\n\n"
+            text += f"⏰ Срок выполнения: {due_date}\n\n"
 
         if note:
-            text += f"Комментарий: {note}\n\n"
+            text += f"💬 Комментарий: {note}\n\n"
 
         text += (
             f"Откройте бота, чтобы начать выполнение.\n\n"
-            f"Удачи!"
+            f"Удачи! 🚀"
         )
 
-        # Запускаем отправку в отдельной задаче, чтобы не блокировать основной поток
-        asyncio.create_task(self._send_message(user.id_max, text))
+        logger.info(f"📨 Подготовка уведомления для пользователя {user.id_max}")
+        logger.debug(f"Текст уведомления:\n{text}")
 
-    def send_bulk_assignment_notification(
+        await self._send_message(user.id_max, text)
+
+    async def send_bulk_assignment_notification(
         self,
         users: list[User],
         material: Optional[Material] = None,
@@ -94,8 +113,10 @@ class MaxNotificationService:
         note: Optional[str] = None
     ):
         """Отправляет массовое уведомление о назначении"""
+        logger.info(f"📨 Массовая отправка уведомлений для {len(users)} пользователей")
+        
         for user in users:
-            self.send_assignment_notification(
+            await self.send_assignment_notification(
                 user=user,
                 material=material,
                 test=test,
