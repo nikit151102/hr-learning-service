@@ -33,7 +33,6 @@ def request_invitation(
             Invitation.requested_by_id_max == requested_by_id_max,
             Invitation.status.in_([
                 InvitationStatus.pending,
-                InvitationStatus.approved,
             ]),
         )
         .first()
