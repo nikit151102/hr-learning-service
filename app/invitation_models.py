@@ -17,11 +17,13 @@ from app.db.session import Base
 
 
 class InvitationStatus(str, enum.Enum):
-    pending = "pending"
-    accepted = "accepted"
-    declined = "declined"
-    expired = "expired"
-    canceled = "canceled"
+    pending = "pending"        # Ожидает подтверждения админа
+    approved = "approved"      # Подтверждено админом
+    accepted = "accepted"      # Пользователь принял и создал аккаунт
+    declined = "declined"      # Отклонено пользователем
+    rejected = "rejected"      # Отклонено админом
+    expired = "expired"        # Истекло
+    canceled = "canceled"      # Отменено
 
 
 class Invitation(Base):
@@ -42,7 +44,11 @@ class Invitation(Base):
         default=InvitationStatus.pending,
     )
 
-    invited_by: Mapped[uuid.UUID] = mapped_column(
+    # Кто создал запрос (сам пользователь через бота)
+    requested_by_id_max: Mapped[str] = mapped_column(String(255), nullable=True)
+
+    # Кто подтвердил (админ/HR)
+    approved_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
@@ -54,6 +60,10 @@ class Invitation(Base):
         DateTime(timezone=True), nullable=False
     )
 
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -62,6 +72,11 @@ class Invitation(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    rejected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    reject_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     decline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -72,7 +87,7 @@ class Invitation(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    inviter = relationship("User", foreign_keys=[invited_by])
+    approver = relationship("User", foreign_keys=[approved_by])
 
     def is_expired(self) -> bool:
         return datetime.utcnow() > self.expires_at.replace(tzinfo=None)

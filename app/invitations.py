@@ -6,19 +6,23 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.deps import HRRequired, get_current_user
-from app.invitation_models import InvitationStatus
+from app.invitation_models import Invitation, InvitationStatus
 from app.invitation_schemas import (
     InvitationAccept,
     InvitationCreate,
     InvitationDecline,
     InvitationRead,
     InvitationResponse,
+    InvitationRequest,
+    InvitationApprove,
+    InvitationReject,
 )
-from app.services.invitation_service import (
-    accept_invitation,
-    cancel_invitation,
-    create_invitation,
-    decline_invitation,
+from app.invitation_service import (
+    accept_approved_invitation,
+    approve_invitation,
+    get_invitation_by_id_max,
+    reject_invitation,
+    request_invitation,
     list_invitations,
 )
 from app.models import User
@@ -28,32 +32,84 @@ router = APIRouter(prefix="/invitations", tags=["Приглашения"])
 
 
 @router.post(
-    "",
+    "/request",
     response_model=InvitationRead,
     status_code=201,
-    summary="Создать приглашение",
-    description="Создаёт новое приглашение для пользователя",
+    summary="Запросить приглашение",
+    description="Пользователь запрашивает приглашение через бота",
 )
-def create_invitation_endpoint(
-    payload: InvitationCreate,
+def request_invitation_endpoint(
+    payload: InvitationRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(HRRequired),
 ):
-    invitation = create_invitation(
+    """Публичный endpoint - пользователь сам запрашивает приглашение"""
+    invitation = request_invitation(
         db=db,
         email=payload.email,
         full_name=payload.full_name,
-        invited_by=current_user.id,
         id_max=payload.id_max,
+        requested_by_id_max=payload.id_max,
         role=payload.role,
         department=payload.department,
         expires_in_days=payload.expires_in_days,
     )
 
-    # Здесь можно добавить отправку email/уведомления
-    # send_invitation_email(invitation)
-
     return invitation
+
+
+@router.get(
+    "/my",
+    response_model=Optional[InvitationRead],
+    summary="Моё приглашение",
+    description="Получить последнее приглашение для текущего пользователя",
+)
+def get_my_invitation_endpoint(
+    id_max: str = Query(..., description="ID Max пользователя"),
+    db: Session = Depends(get_db),
+):
+    """Публичный endpoint - проверка статуса своего приглашения"""
+    invitation = get_invitation_by_id_max(db, id_max)
+    
+    if not invitation:
+        return None
+    
+    return invitation
+
+
+@router.post(
+    "/{invitation_id}/approve",
+    response_model=InvitationRead,
+    summary="Подтвердить приглашение",
+    description="Админ подтверждает приглашение",
+)
+def approve_invitation_endpoint(
+    invitation_id: UUID,
+    payload: InvitationApprove,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    return approve_invitation(
+        db=db,
+        invitation_id=invitation_id,
+        approved_by=current_user.id,
+        role=payload.role,
+        department=payload.department,
+    )
+
+
+@router.post(
+    "/{invitation_id}/reject",
+    response_model=InvitationRead,
+    summary="Отклонить приглашение",
+    description="Админ отклоняет приглашение",
+)
+def reject_invitation_endpoint(
+    invitation_id: UUID,
+    payload: InvitationReject,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    return reject_invitation(db, invitation_id, payload.reason)
 
 
 @router.get(
@@ -92,8 +148,6 @@ def get_invitation_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
-    from app.invitation_models import Invitation
-
     invitation = db.query(Invitation).filter(Invitation.id == invitation_id).first()
 
     if not invitation:
@@ -103,30 +157,17 @@ def get_invitation_endpoint(
 
 
 @router.post(
-    "/{invitation_id}/cancel",
-    response_model=InvitationRead,
-    summary="Отменить приглашение",
-    description="Отменяет активное приглашение",
-)
-def cancel_invitation_endpoint(
-    invitation_id: UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(HRRequired),
-):
-    return cancel_invitation(db, invitation_id)
-
-
-@router.post(
     "/accept",
     response_model=InvitationResponse,
     summary="Принять приглашение",
-    description="Принимает приглашение и создаёт пользователя",
+    description="Принимает подтверждённое приглашение и создаёт пользователя",
 )
 def accept_invitation_endpoint(
     payload: InvitationAccept,
     db: Session = Depends(get_db),
 ):
-    user = accept_invitation(db, payload.invitation_code, payload.password)
+    """Публичный endpoint - пользователь принимает подтверждённое приглашение"""
+    user = accept_approved_invitation(db, payload.invitation_code, payload.id_max)
 
     invitation = (
         db.query(Invitation)
@@ -140,51 +181,3 @@ def accept_invitation_endpoint(
         invitation=InvitationRead.model_validate(invitation),
         user_id=user.id,
     )
-
-
-@router.post(
-    "/decline",
-    response_model=InvitationResponse,
-    summary="Отклонить приглашение",
-    description="Отклоняет приглашение",
-)
-def decline_invitation_endpoint(
-    payload: InvitationDecline,
-    db: Session = Depends(get_db),
-):
-    invitation = decline_invitation(db, payload.invitation_code, payload.reason)
-
-    return InvitationResponse(
-        success=True,
-        message="Приглашение отклонено",
-        invitation=InvitationRead.model_validate(invitation),
-    )
-
-
-@router.get(
-    "/check/{code}",
-    response_model=InvitationRead,
-    summary="Проверить приглашение",
-    description="Проверяет действительность приглашения по коду",
-)
-def check_invitation_endpoint(
-    code: str,
-    db: Session = Depends(get_db),
-):
-    from app.invitation_models import Invitation
-
-    invitation = db.query(Invitation).filter(Invitation.invitation_code == code).first()
-
-    if not invitation:
-        raise HTTPException(status_code=404, detail="Приглашение не найдено")
-
-    if invitation.is_expired():
-        raise HTTPException(status_code=410, detail="Приглашение истекло")
-
-    if invitation.status != InvitationStatus.pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Приглашение уже {invitation.status.value}",
-        )
-
-    return invitation
