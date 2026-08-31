@@ -1,7 +1,7 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -22,6 +22,8 @@ from app.services.invitation_service import (
 )
 from app.models import User
 from app.schemas import Page
+from app.services.max_notification_service import max_notification_service
+
 
 router = APIRouter(prefix="/invitations", tags=["Приглашения"])
 
@@ -104,15 +106,16 @@ def get_invitation_endpoint(
     "/{invitation_id}/approve",
     response_model=InvitationRead,
     summary="Подтвердить приглашение",
-    description="При подтверждении СРАЗУ создаётся пользователь",
+    description="При подтверждении СРАЗУ создаётся пользователь и ему отправляется приветственное сообщение с главным меню",
 )
-def approve_invitation_endpoint(
+async def approve_invitation_endpoint(
     invitation_id: UUID,
     payload: InvitationApprove,
+    background_tasks: BackgroundTasks,  # ← Для асинхронной отправки
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
-    return approve_invitation(
+    invitation = approve_invitation(
         db=db,
         invitation_id=invitation_id,
         approved_by=current_user.id,
@@ -120,16 +123,49 @@ def approve_invitation_endpoint(
         department=payload.department,
     )
 
+    # Получаем созданного пользователя
+    user = db.query(User).filter(User.id_max == invitation.id_max).first()
+    
+    if user:
+        # Отправляем приветственное сообщение в фоне
+        background_tasks.add_task(
+            max_notification_service.send_invitation_approved,
+            user=user
+        )
+
+    return invitation
+
 
 @router.post(
     "/{invitation_id}/reject",
     response_model=InvitationRead,
     summary="Отклонить приглашение",
+    description="При отклонении пользователю отправляется сообщение с причиной",
 )
-def reject_invitation_endpoint(
+async def reject_invitation_endpoint(
     invitation_id: UUID,
     payload: InvitationReject,
+    background_tasks: BackgroundTasks,  # ← Для асинхронной отправки
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
-    return reject_invitation(db, invitation_id, payload.reason)
+    # Получаем приглашение ДО отклонения, чтобы взять ФИО и id_max
+    invitation = db.query(Invitation).filter(Invitation.id == invitation_id).first()
+    if not invitation:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    
+    id_max = invitation.id_max
+    full_name = invitation.full_name
+
+    # Отклоняем
+    invitation = reject_invitation(db, invitation_id, payload.reason)
+
+    # Отправляем сообщение об отказе в фоне
+    background_tasks.add_task(
+        max_notification_service.send_invitation_rejected,
+        id_max=id_max,
+        full_name=full_name,
+        reason=payload.reason
+    )
+
+    return invitation

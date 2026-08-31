@@ -68,6 +68,8 @@ class MaxNotificationService:
             logger.error(traceback.format_exc())
             return False
 
+    # === УВЕДОМЛЕНИЯ О НАЗНАЧЕНИЯХ ===
+
     async def send_assignment_notification(
         self,
         user: User,
@@ -81,7 +83,6 @@ class MaxNotificationService:
             logger.warning("⚠️ MAX Bot не инициализирован, уведомление не отправлено")
             return
 
-        # Формируем текст уведомления
         if material:
             object_type = "материал"
             object_title = material.title
@@ -108,9 +109,8 @@ class MaxNotificationService:
         if note:
             text += f"💬 Комментарий: {note}\n\n"
 
-        text += f"Нажмите кнопку ниже, чтобы начать:\n"
+        text += "Нажмите кнопку ниже, чтобы начать:\n"
 
-        # Создаем кнопки
         buttons = []
         
         if is_material:
@@ -130,7 +130,6 @@ class MaxNotificationService:
                 )
             ])
         
-        # Добавляем кнопку "Мои назначения"
         buttons.append([
             CallbackButton(
                 text="📋 Мои назначения",
@@ -145,8 +144,6 @@ class MaxNotificationService:
         )
 
         logger.info(f"📨 Подготовка уведомления для пользователя {user.id_max}")
-        logger.debug(f"Текст уведомления:\n{text}")
-
         await self._send_message(user.id_max, text, [attachment])
 
     async def send_bulk_assignment_notification(
@@ -168,6 +165,112 @@ class MaxNotificationService:
                 due_date=due_date,
                 note=note
             )
+
+    # === УВЕДОМЛЕНИЯ О ПРИГЛАШЕНИЯХ ===
+
+    async def send_invitation_approved(self, user: User):
+        """
+        Отправляет приветственное сообщение с главным меню
+        после подтверждения приглашения
+        """
+        if not self.bot:
+            logger.warning("⚠️ MAX Bot не инициализирован, уведомление не отправлено")
+            return
+
+        text = (
+            f"🎉 **Добро пожаловать, {user.full_name}!**\n\n"
+            f"Ваш запрос на регистрацию одобрен!\n\n"
+            f"Теперь у вас есть полный доступ к системе обучения.\n\n"
+            f"Выберите раздел:"
+        )
+
+        # Главное меню (совпадает с main_menu_keyboard в боте)
+        buttons = [
+            [CallbackButton(
+                text="📚 Мои назначения",
+                payload="menu_assignments",
+                intent=Intent.DEFAULT
+            )],
+            [CallbackButton(
+                text="📖 Категории обучения",
+                payload="menu_categories",
+                intent=Intent.DEFAULT
+            )],
+            [CallbackButton(
+                text="📝 Доступные тесты",
+                payload="menu_tests",
+                intent=Intent.DEFAULT
+            )],
+            [CallbackButton(
+                text="📊 Мои результаты",
+                payload="menu_results",
+                intent=Intent.DEFAULT
+            )],
+            [CallbackButton(
+                text="🏆 Сертификаты",
+                payload="menu_certificates",
+                intent=Intent.DEFAULT
+            )],
+            [CallbackButton(
+                text="🔔 Уведомления",
+                payload="menu_notifications",
+                intent=Intent.DEFAULT
+            )],
+        ]
+
+        attachment = Attachment(
+            type="inline_keyboard",
+            payload=ButtonsPayload(buttons=buttons)
+        )
+
+        logger.info(f"📨 Отправка приветственного сообщения пользователю {user.id_max}")
+        await self._send_message(user.id_max, text, [attachment])
+
+    async def send_invitation_rejected(
+        self,
+        id_max: str,
+        full_name: str,
+        reason: Optional[str] = None
+    ):
+        """
+        Отправляет сообщение об отклонении приглашения
+        """
+        if not self.bot:
+            logger.warning("⚠️ MAX Bot не инициализирован, уведомление не отправлено")
+            return
+
+        text = (
+            f"❌ **Запрос на регистрацию отклонён**\n\n"
+            f"Здравствуйте, {full_name}!\n\n"
+            f"К сожалению, ваш запрос на регистрацию в системе обучения "
+            f"был отклонён администратором.\n\n"
+        )
+
+        if reason:
+            text += f"**Причина:**\n{reason}\n\n"
+
+        text += (
+            f"Если вы считаете, что это ошибка, обратитесь к вашему "
+            f"руководителю или в отдел кадров.\n\n"
+            f"Вы можете подать новый запрос через бота."
+        )
+
+        # Кнопка для нового запроса
+        buttons = [
+            [CallbackButton(
+                text="🔄 Подать новый запрос",
+                payload="request_invitation",
+                intent=Intent.DEFAULT
+            )]
+        ]
+
+        attachment = Attachment(
+            type="inline_keyboard",
+            payload=ButtonsPayload(buttons=buttons)
+        )
+
+        logger.info(f"📨 Отправка уведомления об отказе пользователю {id_max}")
+        await self._send_message(id_max, text, [attachment])
 
 
 # Глобальный экземпляр сервиса
