@@ -157,13 +157,13 @@ def bootstrap_hr_manager() -> None:
             user = User(
                 id_max=settings.bootstrap_hr_manager_id_max,
                 full_name=settings.bootstrap_hr_manager_full_name,
-                role=UserRole.hr_manager, 
+                role=UserRole.hr, 
                 is_active=True,
             )
             db.add(user)
             db.commit()
-        elif user.role != UserRole.hr_manager:
-            user.role = UserRole.hr_manager
+        elif user.role != UserRole.hr:
+            user.role = UserRole.hr
             db.commit()
     finally:
         db.close()
@@ -182,7 +182,7 @@ async def lifespan(app: FastAPI):
     init_db()
     bootstrap_admin()
     bootstrap_hr_manager()
-    
+
     try:
         setup_scheduler()
     except Exception:
