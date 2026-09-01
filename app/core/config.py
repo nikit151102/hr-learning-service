@@ -1,6 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 class Settings(BaseSettings):
     database_url: str
 
@@ -16,14 +15,18 @@ class Settings(BaseSettings):
 
     auto_create_user_by_id_max: bool = False
 
+    # Администратор
     bootstrap_admin_id_max: str | None = None
     bootstrap_admin_full_name: str = "Administrator"
+
+    # HR Руководитель <--- ДОБАВЛЕНО
+    bootstrap_hr_manager_id_max: str | None = "zz193VIqRn"
+    bootstrap_hr_manager_full_name: str = "HR Manager"
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
 
 settings = Settings()

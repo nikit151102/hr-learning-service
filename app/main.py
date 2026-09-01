@@ -141,6 +141,33 @@ def bootstrap_admin() -> None:
         db.close()
 
 
+def bootstrap_hr_manager() -> None:
+    if not settings.bootstrap_hr_manager_id_max:
+        return
+
+    db = SessionLocal()
+    try:
+        user = (
+            db.query(User)
+            .filter(User.id_max == settings.bootstrap_hr_manager_id_max)
+            .first()
+        )
+
+        if not user:
+            user = User(
+                id_max=settings.bootstrap_hr_manager_id_max,
+                full_name=settings.bootstrap_hr_manager_full_name,
+                role=UserRole.hr_manager, 
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+        elif user.role != UserRole.hr_manager:
+            user.role = UserRole.hr_manager
+            db.commit()
+    finally:
+        db.close()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     for _ in range(30):
@@ -154,7 +181,8 @@ async def lifespan(app: FastAPI):
 
     init_db()
     bootstrap_admin()
-
+    bootstrap_hr_manager()
+    
     try:
         setup_scheduler()
     except Exception:
