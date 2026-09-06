@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File as FileField, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import func, or_, text
+from sqlalchemy import case, exists, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from app.models import (
     TestQuestion,
     User,
     UserRole,
+    TestAttemptAnswer
 )
 from app.schemas import (
     AnswerOptionCreate,
@@ -41,6 +42,9 @@ from app.schemas import (
     AttemptRead,
     AttemptStartRead,
     AttemptSubmit,
+    AttemptDetailRead,
+    AttemptQuestionDetail,
+    AttemptAnswerOptionDetail,
     CategoryContents,
     CategoryCreate,
     CategoryRead,
@@ -624,6 +628,9 @@ def create_test(
 @router.get("/tests", response_model=Page[TestRead])
 def list_tests(
     search: str | None = None,
+    include_stats: bool = Query(default=True, description="Включить статистику по вопросам"),
+    only_complete: bool = Query(default=False, description="Только полностью готовые тесты"),
+    only_passable: bool = Query(default=False, description="Только тесты, которые можно пройти"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -631,9 +638,11 @@ def list_tests(
 ):
     query = db.query(Test)
 
+    # Ролевая фильтрация
     if current_user.role not in (UserRole.hr, UserRole.admin):
         query = query.filter(Test.is_published.is_(True))
 
+    # Поиск
     if search:
         query = query.filter(
             or_(
@@ -643,7 +652,120 @@ def list_tests(
         )
 
     query = query.order_by(Test.created_at.desc())
-    return paginate(query, page, size)
+    tests = paginate(query, page, size)
+
+    # Если нужна статистика — обогащаем каждый тест
+    if include_stats and tests.get("items"):
+        test_ids = [t.id for t in tests["items"]]
+        stats = _compute_tests_stats(db, test_ids)
+
+        enriched = []
+        for test in tests["items"]:
+            test_dict = TestRead.model_validate(test).model_dump()
+            test_stats = stats.get(test.id, {})
+            test_dict.update(test_stats)
+            enriched.append(test_dict)
+
+        # Фильтры по готовности
+        if only_complete:
+            enriched = [t for t in enriched if t.get("is_complete")]
+        if only_passable:
+            enriched = [t for t in enriched if t.get("is_passable")]
+
+        tests["items"] = enriched
+
+    return tests
+
+
+def _compute_tests_stats(db: Session, test_ids: list) -> dict[UUID, dict]:
+    """
+    Вычисляет статистику по вопросам и ответам для списка тестов.
+    Возвращает словарь {test_id: {question_count, ...}}
+    """
+    if not test_ids:
+        return {}
+
+    # Получаем все активные вопросы для указанных тестов
+    questions = (
+        db.query(TestQuestion)
+        .filter(
+            TestQuestion.test_id.in_(test_ids),
+            TestQuestion.is_active.is_(True)
+        )
+        .all()
+    )
+
+    if not questions:
+        # Если вопросов нет — возвращаем нулевую статистику для всех тестов
+        return {
+            tid: {
+                "question_count": 0,
+                "questions_with_answers": 0,
+                "questions_with_correct_answers": 0,
+                "total_answers_count": 0,
+                "is_complete": False,
+                "is_passable": False,
+            }
+            for tid in test_ids
+        }
+
+    # Получаем все активные ответы для этих вопросов
+    question_ids = [q.id for q in questions]
+    answers = (
+        db.query(TestAnswerOption)
+        .filter(
+            TestAnswerOption.question_id.in_(question_ids),
+            TestAnswerOption.is_active.is_(True)
+        )
+        .all()
+    )
+
+    # Группируем ответы по question_id
+    answers_by_question = {}
+    for answer in answers:
+        if answer.question_id not in answers_by_question:
+            answers_by_question[answer.question_id] = []
+        answers_by_question[answer.question_id].append(answer)
+
+    # Считаем статистику для каждого теста
+    stats = {}
+    questions_by_test = {}
+
+    for question in questions:
+        if question.test_id not in questions_by_test:
+            questions_by_test[question.test_id] = []
+        questions_by_test[question.test_id].append(question)
+
+    for test_id in test_ids:
+        test_questions = questions_by_test.get(test_id, [])
+        q_count = len(test_questions)
+        
+        with_answers = 0
+        with_correct = 0
+        total_answers = 0
+
+        for question in test_questions:
+            q_answers = answers_by_question.get(question.id, [])
+            answer_count = len(q_answers)
+            
+            if answer_count > 0:
+                with_answers += 1
+                total_answers += answer_count
+                
+                # Проверяем, есть ли правильный ответ (score > 0)
+                if any(a.score > 0 for a in q_answers):
+                    with_correct += 1
+
+        stats[test_id] = {
+            "question_count": q_count,
+            "questions_with_answers": with_answers,
+            "questions_with_correct_answers": with_correct,
+            "total_answers_count": total_answers,
+            "is_complete": q_count > 0 and q_count == with_answers,
+            "is_passable": with_correct > 0,
+        }
+
+    return stats
 
 
 @router.get("/tests/{test_id}/full", response_model=TestFullRead)
@@ -891,14 +1013,47 @@ def delete_question(
     question = get_or_404(db, TestQuestion, question_id)
     test = question.test
 
+    # Проверяем, использовался ли вопрос в попытках
+    attempt_answers_count = (
+        db.query(func.count(TestAttemptAnswer.id))
+        .filter(TestAttemptAnswer.question_id == question_id)
+        .scalar()
+        or 0
+    )
+
+    if attempt_answers_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Нельзя удалить вопрос: он использован в {attempt_answers_count} "
+                f"попытках прохождения теста. "
+                f"Сделайте вопрос неактивным (is_active=False) вместо удаления."
+            ),
+        )
+
     try:
+        # Явно удаляем все варианты ответов вопроса
+        deleted_answers = (
+            db.query(TestAnswerOption)
+            .filter(TestAnswerOption.question_id == question_id)
+            .delete(synchronize_session=False)
+        )
+
+        # Удаляем сам вопрос
         db.delete(question)
         db.flush()
 
+        # Пересчитываем баллы теста
         test_service.recalculate_test_scores(db, test)
 
+        # Если тест опубликован — проверяем валидность
         if test.is_published:
-            test_service.validate_publish(db, test)
+            try:
+                test_service.validate_publish(db, test)
+            except HTTPException:
+                # Если после удаления вопрос тест стал невалидным —
+                # автоматически снимаем с публикации
+                test.is_published = False
 
         db.commit()
     except HTTPException:
@@ -908,11 +1063,10 @@ def delete_question(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Question cannot be deleted because it has attempt answers",
+            detail="Не удалось удалить вопрос из-за связанных данных",
         )
 
     return None
-
 
 # ==================== ANSWERS ====================
 
@@ -1134,6 +1288,106 @@ def test_access(
 
     return test_service.get_attempt_access(db, test, current_user)
 
+
+@router.get("/attempts/{attempt_id}/detail", response_model=AttemptDetailRead)
+def get_attempt_detail(
+    attempt_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Полная деталь попытки с вопросами и вариантами ответов"""
+    attempt = get_or_404(db, TestAttempt, attempt_id)
+
+    # Проверка прав: только владелец, HR или админ
+    if current_user.id != attempt.user_id and current_user.role not in (
+        UserRole.hr,
+        UserRole.admin,
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Получаем связанные данные
+    test = db.query(Test).filter(Test.id == attempt.test_id).first()
+    user = db.query(User).filter(User.id == attempt.user_id).first()
+
+    # Получаем ответы пользователя
+    attempt_answers = (
+        db.query(TestAttemptAnswer)
+        .filter(TestAttemptAnswer.attempt_id == attempt_id)
+        .all()
+    )
+
+    # Собираем детали по вопросам
+    questions_detail = []
+    
+    for attempt_answer in attempt_answers:
+        # Получаем вопрос
+        question = db.query(TestQuestion).filter(
+            TestQuestion.id == attempt_answer.question_id
+        ).first()
+        
+        if not question:
+            continue
+
+        # Получаем все варианты ответов для вопроса
+        options = (
+            db.query(TestAnswerOption)
+            .filter(
+                TestAnswerOption.question_id == question.id,
+                TestAnswerOption.is_active.is_(True)
+            )
+            .order_by(TestAnswerOption.sort_order)
+            .all()
+        )
+
+        # ID выбранных пользователем вариантов
+        selected_ids = set(attempt_answer.selected_option_ids or [])
+
+        # Формируем детали вариантов
+        options_detail = []
+        for option in options:
+            is_selected = str(option.id) in selected_ids or option.id in selected_ids
+            is_correct = option.score > 0
+            
+            options_detail.append(AttemptAnswerOptionDetail(
+                id=option.id,
+                text=option.text,
+                score=option.score,
+                is_selected=is_selected,
+                is_correct=is_correct,
+            ))
+
+        # Определяем правильность ответа пользователя
+        # Правильно если все выбранные варианты правильные и набран полный балл
+        is_correct_answer = attempt_answer.score >= attempt_answer.max_score and attempt_answer.max_score > 0
+
+        questions_detail.append(AttemptQuestionDetail(
+            question_id=question.id,
+            question_text=question.text,
+            question_type=question.question_type.value,
+            user_score=attempt_answer.score,
+            max_score=attempt_answer.max_score,
+            is_correct=is_correct_answer,
+            options=options_detail,
+        ))
+
+
+    return AttemptDetailRead(
+        id=attempt.id,
+        test_id=attempt.test_id,
+        test_title=test.title if test else None,
+        user_id=attempt.user_id,
+        user_name=user.full_name if user else None,
+        attempt_number=attempt.attempt_number,
+        status=attempt.status.value,
+        score=attempt.score,
+        max_score=attempt.max_score,
+        passing_score=attempt.passing_score,
+        passed=attempt.passed,
+        grade_name=attempt.grade_name,
+        started_at=attempt.started_at,
+        completed_at=attempt.completed_at,
+        questions=questions_detail,
+    )
 
 @router.post("/tests/{test_id}/attempts", response_model=AttemptStartRead, status_code=201)
 def start_attempt(

@@ -140,16 +140,24 @@ class TestRead(BaseModel):
 
     id: UUID
     title: str
-    topic: Optional[str]
-    description: Optional[str]
+    topic: str | None
+    description: str | None
     passing_score: int
     max_score: int
-    max_attempts: Optional[int]
-    retake_interval_minutes: Optional[int]
+    max_attempts: int | None
+    retake_interval_minutes: int | None
     shuffle_questions: bool
     is_published: bool
     created_at: datetime
+    updated_at: datetime
 
+    # === НОВЫЕ ПОЛЯ ДЛЯ СТАТИСТИКИ ===
+    question_count: int = 0
+    total_answers_count: int = 0
+    questions_with_answers: int = 0
+    questions_with_correct_answers: int = 0
+    is_complete: bool = False
+    is_passable: bool = False
 
 class AnswerOptionCreate(BaseModel):
     text: str
@@ -381,3 +389,47 @@ class AttemptAccess(BaseModel):
     completed_attempts: int
     attempts_left: Optional[int]
     cooldown_until: Optional[datetime]
+
+
+
+class AttemptAnswerOptionDetail(BaseModel):
+    """Деталь варианта ответа в попытке"""
+    id: UUID
+    text: str
+    score: int  # Балл за этот вариант (отрицательный = штраф)
+    is_selected: bool  # Выбрал ли пользователь
+    is_correct: bool   # Является ли правильным (score > 0)
+
+
+class AttemptQuestionDetail(BaseModel):
+    """Деталь вопроса в попытке"""
+    question_id: UUID
+    question_text: str
+    question_type: str  # single_choice / multiple_choice
+    user_score: int     # Набранный балл за вопрос
+    max_score: int      # Максимальный балл за вопрос
+    is_correct: bool    # Правильно ли ответил (user_score == max_score)
+    options: list[AttemptAnswerOptionDetail]
+
+
+class AttemptDetailRead(BaseModel):
+    """Полная деталь попытки с вопросами и ответами"""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    test_id: UUID
+    test_title: Optional[str] = None
+    user_id: UUID
+    user_name: Optional[str] = None
+    attempt_number: int
+    status: str
+    score: Optional[int] = None
+    max_score: Optional[int] = None
+    passing_score: Optional[int] = None
+    passed: Optional[bool] = None
+    grade_name: Optional[str] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    
+    # Детали по каждому вопросу
+    questions: list[AttemptQuestionDetail] = []

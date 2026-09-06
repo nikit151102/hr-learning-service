@@ -426,3 +426,5 @@ class AssignmentDetailRead(BaseModel):
     test_score: int | None
     test_max_score: int | None
     test_grade: str | None
+
+
