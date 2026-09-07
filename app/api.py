@@ -1104,6 +1104,33 @@ def create_answer(
     test = question.test
 
     try:
+        # === IDEMPOTENCY: проверяем, нет ли уже ответа с таким текстом ===
+        existing = (
+            db.query(TestAnswerOption)
+            .filter(
+                TestAnswerOption.question_id == question_id,
+                TestAnswerOption.text == payload.text,
+            )
+            .first()
+        )
+
+        if existing:
+            # Обновляем существующий вместо создания дубликата
+            existing.score = payload.score
+            existing.sort_order = payload.sort_order
+            existing.is_active = payload.is_active
+            db.flush()
+
+            test_service.recalculate_test_scores(db, test)
+
+            if test.is_published:
+                test_service.validate_publish(db, test)
+
+            db.commit()
+            db.refresh(existing)
+            return existing
+
+        # === Создаём новый ответ ===
         answer = TestAnswerOption(
             question_id=question.id,
             **payload.model_dump(),
@@ -1128,7 +1155,7 @@ def create_answer(
 
     return answer
 
-
+    
 @router.patch("/answers/{answer_id}", response_model=AnswerOptionRead)
 def update_answer(
     answer_id: UUID,
@@ -1171,18 +1198,46 @@ def delete_answer(
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
-    answer = get_or_404(db, TestAnswerOption, answer_id)
+    answer = db.query(TestAnswerOption).filter(
+        TestAnswerOption.id == answer_id
+    ).first()
+
+    # === IDEMPOTENCY: если ответа нет — всё равно успех ===
+    if not answer:
+        return None
+
     question = answer.question
     test = question.test
 
+    # Проверяем, использовался ли ответ в попытках
+    used_in_attempts = (
+        db.query(func.count(TestAttemptAnswer.id))
+        .filter(
+            TestAttemptAnswer.attempt_id.in_(
+                db.query(TestAttempt.id).filter(TestAttempt.test_id == test.id)
+            ),
+            TestAttemptAnswer.selected_option_ids.contains([str(answer_id)])
+        )
+        .scalar()
+        or 0
+    )
+
     try:
-        db.delete(answer)
+        if used_in_attempts > 0:
+            # Если ответ использовался — делаем неактивным вместо удаления
+            answer.is_active = False
+        else:
+            db.delete(answer)
+        
         db.flush()
 
         test_service.recalculate_test_scores(db, test)
 
         if test.is_published:
-            test_service.validate_publish(db, test)
+            try:
+                test_service.validate_publish(db, test)
+            except HTTPException:
+                test.is_published = False
 
         db.commit()
     except HTTPException:
