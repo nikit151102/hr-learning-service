@@ -1004,7 +1004,18 @@ def update_question(
     return question
 
 
-@router.delete("/questions/{question_id}", status_code=204)
+from fastapi import Response
+
+@router.delete(
+    "/questions/{question_id}",
+    responses={
+        200: {
+            "model": QuestionRead,
+            "description": "Вопрос деактивирован вместо удаления (используется в попытках)",
+        },
+        204: {"description": "Вопрос полностью удалён"},
+    },
+)
 def delete_question(
     question_id: UUID,
     db: Session = Depends(get_db),
@@ -1021,23 +1032,35 @@ def delete_question(
         or 0
     )
 
-    if attempt_answers_count > 0:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Нельзя удалить вопрос: он использован в {attempt_answers_count} "
-                f"попытках прохождения теста. "
-                f"Сделайте вопрос неактивным (is_active=False) вместо удаления."
-            ),
-        )
-
     try:
-        # Явно удаляем все варианты ответов вопроса
-        deleted_answers = (
-            db.query(TestAnswerOption)
-            .filter(TestAnswerOption.question_id == question_id)
-            .delete(synchronize_session=False)
-        )
+        if attempt_answers_count > 0:
+            # === Вопрос используется в попытках — делаем неактивным ===
+            if question.is_active:
+                question.is_active = False
+                db.flush()
+
+                # Пересчитываем баллы теста
+                test_service.recalculate_test_scores(db, test)
+
+                # Проверяем валидность публикации
+                if test.is_published:
+                    try:
+                        test_service.validate_publish(db, test)
+                    except HTTPException:
+                        # Если тест стал невалидным — снимаем с публикации
+                        test.is_published = False
+
+                db.commit()
+                db.refresh(question)
+
+            # Возвращаем обновлённый вопрос (статус 200)
+            return question
+
+        # === Вопрос не используется — удаляем полностью ===
+        # Удаляем все варианты ответов
+        db.query(TestAnswerOption).filter(
+            TestAnswerOption.question_id == question_id
+        ).delete(synchronize_session=False)
 
         # Удаляем сам вопрос
         db.delete(question)
@@ -1046,16 +1069,18 @@ def delete_question(
         # Пересчитываем баллы теста
         test_service.recalculate_test_scores(db, test)
 
-        # Если тест опубликован — проверяем валидность
+        # Проверяем валидность публикации
         if test.is_published:
             try:
                 test_service.validate_publish(db, test)
             except HTTPException:
-                # Если после удаления вопрос тест стал невалидным —
-                # автоматически снимаем с публикации
                 test.is_published = False
 
         db.commit()
+
+        # Возвращаем 204 (успешное удаление без тела)
+        return Response(status_code=204)
+
     except HTTPException:
         db.rollback()
         raise
@@ -1065,8 +1090,6 @@ def delete_question(
             status_code=409,
             detail="Не удалось удалить вопрос из-за связанных данных",
         )
-
-    return None
 
 # ==================== ANSWERS ====================
 
