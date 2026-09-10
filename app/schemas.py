@@ -462,3 +462,40 @@ class LocationRead(BaseModel):
     address: str
     is_active: bool
     sort_order: int
+
+from uuid import UUID
+from typing import Optional
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict
+
+
+class LocationCreate(BaseModel):
+    location_type: str
+    name: str
+    city: str
+    address: str
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class LocationUpdate(BaseModel):
+    location_type: Optional[str] = None
+    name: Optional[str] = None
+    city: Optional[str] = None
+    address: Optional[str] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+class LocationRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    location_type: str
+    name: str
+    city: str
+    address: str
+    is_active: bool
+    sort_order: int
+    created_at: datetime
+    updated_at: datetime
