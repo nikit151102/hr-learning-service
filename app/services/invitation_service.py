@@ -208,7 +208,6 @@ def list_invitations(
     size: int = 20,
 ) -> tuple[list[dict], int]:
     """Возвращает приглашения с информацией о подразделении"""
-    from app.models import Invitation, Location
 
     query = db.query(Invitation)
 
