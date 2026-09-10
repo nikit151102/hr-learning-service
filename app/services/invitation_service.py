@@ -10,6 +10,7 @@ from app.invitation_models import Invitation, InvitationStatus
 from app.models import User, UserRole, LocationType
 from uuid import UUID
 from app.models import Location, User
+from app.deps import get_or_404 
 
 def generate_invitation_code() -> str:
     return secrets.token_urlsafe(32)
@@ -119,7 +120,7 @@ def approve_invitation(
     db.refresh(invitation)
 
     return invitation
-    
+
 
 def reject_invitation(
     db: Session,
