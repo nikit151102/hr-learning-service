@@ -1537,25 +1537,161 @@ def start_attempt(
         questions=public_questions,
     )
 
-
 @router.get("/tests/{test_id}/attempts", response_model=Page[AttemptRead])
 def list_test_attempts(
     test_id: UUID,
+    status: str | None = None,
+    passed: str | None = None,
+    user_search: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    location_type: str | None = None,
+    location_city: str | None = None,
+    location_id: str | None = None,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
+    from app.models import Location
+    
     get_or_404(db, Test, test_id)
 
     query = (
         db.query(TestAttempt)
+        .join(User, TestAttempt.user_id == User.id)
+        .outerjoin(Location, User.location_id == Location.id)
         .filter(TestAttempt.test_id == test_id)
-        .order_by(TestAttempt.started_at.desc())
     )
 
-    return paginate(query, page, size)
+    # Фильтры
+    if status:
+        query = query.filter(TestAttempt.status == status)
+    
+    if passed == "passed":
+        query = query.filter(TestAttempt.passed == True)
+    elif passed == "failed":
+        query = query.filter(TestAttempt.passed == False)
+    
+    if user_search:
+        query = query.filter(
+            or_(
+                User.full_name.ilike(f"%{user_search}%"),
+                User.id_max.ilike(f"%{user_search}%"),
+            )
+        )
+    
+    if date_from:
+        try:
+            from datetime import datetime
+            dt_from = datetime.fromisoformat(date_from)
+            query = query.filter(TestAttempt.started_at >= dt_from)
+        except ValueError:
+            pass
+    
+    if date_to:
+        try:
+            from datetime import datetime, timedelta
+            dt_to = datetime.fromisoformat(date_to) + timedelta(days=1)
+            query = query.filter(TestAttempt.started_at < dt_to)
+        except ValueError:
+            pass
+    
+    if location_type:
+        query = query.filter(Location.location_type == location_type)
+    
+    if location_city:
+        query = query.filter(Location.city == location_city)
+    
+    if location_id:
+        query = query.filter(User.location_id == location_id)
 
+    query = query.order_by(TestAttempt.started_at.desc())
+    
+    # Получаем результаты
+    total = query.count()
+    attempts = query.offset((page - 1) * size).limit(size).all()
+    
+    # Обогащаем данными о подразделении
+    enriched = []
+    for attempt in attempts:
+        attempt_dict = AttemptRead.model_validate(attempt).model_dump()
+        
+        # Добавляем информацию о пользователе и подразделении
+        user = attempt.user
+        location = user.location if hasattr(user, 'location') else None
+        
+        attempt_dict["user_name"] = user.full_name
+        attempt_dict["user_email"] = getattr(user, 'email', None)
+        attempt_dict["user_id_max"] = user.id_max
+        
+        if location:
+            attempt_dict["location_id"] = str(location.id)
+            attempt_dict["location_name"] = location.name
+            attempt_dict["location_city"] = location.city
+            attempt_dict["location_address"] = location.address
+            attempt_dict["location_type"] = location.location_type.value if location.location_type else None
+        else:
+            attempt_dict["location_id"] = None
+            attempt_dict["location_name"] = None
+            attempt_dict["location_city"] = None
+            attempt_dict["location_address"] = None
+            attempt_dict["location_type"] = None
+        
+        enriched.append(attempt_dict)
+    
+    return {
+        "items": enriched,
+        "total": total,
+        "page": page,
+        "size": size,
+    }
+
+@router.get("/tests/{test_id}/attempts/filters")
+def get_attempt_filters(
+    test_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    """Возвращает доступные фильтры для попыток теста"""
+    from app.models import Location
+    
+    get_or_404(db, Test, test_id)
+    
+    # Получаем все попытки теста с пользователями и подразделениями
+    attempts = (
+        db.query(TestAttempt)
+        .join(User, TestAttempt.user_id == User.id)
+        .outerjoin(Location, User.location_id == Location.id)
+        .filter(TestAttempt.test_id == test_id)
+        .all()
+    )
+    
+    # Собираем уникальные города
+    cities = sorted(set(
+        attempt.user.location.city 
+        for attempt in attempts 
+        if attempt.user.location and attempt.user.location.city
+    ))
+    
+    # Собираем уникальные подразделения
+    locations = {}
+    for attempt in attempts:
+        if attempt.user.location:
+            loc = attempt.user.location
+            locations[str(loc.id)] = {
+                "id": str(loc.id),
+                "name": loc.name,
+                "city": loc.city,
+                "type": loc.location_type.value if loc.location_type else None
+            }
+    
+    return {
+        "cities": cities,
+        "locations": list(locations.values()),
+        "location_types": ["office", "warehouse", "store"]
+    }
+    
 
 @router.get("/attempts/{attempt_id}", response_model=AttemptRead)
 def get_attempt(
