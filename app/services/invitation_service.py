@@ -85,80 +85,41 @@ def request_invitation(
 
 def approve_invitation(
     db: Session,
-    invitation_id: uuid.UUID,
-    approved_by: uuid.UUID,
-    role: Optional[str] = None,
-    department: Optional[str] = None,
+    invitation_id: UUID,
+    approved_by: UUID,
+    role: str = "employee",
+    department: str | None = None,
 ) -> Invitation:
-    """
-    Админ подтверждает приглашение.
-    
-    ⭐ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: При подтверждении СРАЗУ создаётся пользователь.
-    """
-
-    invitation = db.query(Invitation).filter(Invitation.id == invitation_id).first()
-
-    if not invitation:
-        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    invitation = get_or_404(db, Invitation, invitation_id)
 
     if invitation.status != InvitationStatus.pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Нельзя подтвердить приглашение со статусом {invitation.status.value}",
-        )
+        raise HTTPException(status_code=409, detail="Invitation is not pending")
 
     if invitation.is_expired():
         invitation.status = InvitationStatus.expired
         db.commit()
-        raise HTTPException(status_code=410, detail="Приглашение истекло")
+        raise HTTPException(status_code=410, detail="Invitation has expired")
 
-    # Проверяем, не создан ли уже пользователь (двойная проверка)
-    if not invitation.id_max:
-        raise HTTPException(
-            status_code=422,
-            detail="У приглашения нет id_max, невозможно создать пользователя",
-        )
-
-    existing_user = db.query(User).filter(User.id_max == invitation.id_max).first()
-    if existing_user:
-        # Пользователь уже существует - просто отмечаем как принятое
-        invitation.status = InvitationStatus.accepted
-        invitation.approved_by = approved_by
-        invitation.approved_at = datetime.now(timezone.utc)
-        invitation.accepted_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(invitation)
-        return invitation
-
-    # Определяем финальную роль и отдел
-    final_role = role or invitation.role or "employee"
-    final_department = department or invitation.department
-
-    # ⭐ Создаём пользователя СРАЗУ
+    # === СОЗДАЁМ ПОЛЬЗОВАТЕЛЯ С location_id ===
     user = User(
         id_max=invitation.id_max,
         full_name=invitation.full_name,
-        role=UserRole(final_role),
+        role=UserRole(role),
         is_active=True,
+        location_id=invitation.location_id,  # ← КОПИРУЕМ location_id
     )
+
     db.add(user)
 
-    # Обновляем приглашение
-    invitation.status = InvitationStatus.accepted  # сразу accepted, не approved
+    invitation.status = InvitationStatus.accepted
     invitation.approved_by = approved_by
     invitation.approved_at = datetime.now(timezone.utc)
-    invitation.accepted_at = datetime.now(timezone.utc)
-
-    if role:
-        invitation.role = final_role
-    if department:
-        invitation.department = final_department
 
     db.commit()
     db.refresh(invitation)
 
     return invitation
-
+    
 
 def reject_invitation(
     db: Session,

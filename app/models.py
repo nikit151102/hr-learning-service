@@ -94,6 +94,12 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
