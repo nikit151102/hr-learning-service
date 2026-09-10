@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.invitation_models import Invitation, InvitationStatus
-from app.models import User, UserRole
+from app.models import User, UserRole, Location, LocationType
 from uuid import UUID
 
 def generate_invitation_code() -> str:
