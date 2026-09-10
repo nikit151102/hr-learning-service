@@ -462,6 +462,8 @@ class LocationRead(BaseModel):
     address: str
     is_active: bool
     sort_order: int
+    created_at: datetime
+    updated_at: datetime
 
 from uuid import UUID
 from typing import Optional

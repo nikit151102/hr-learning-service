@@ -1770,14 +1770,18 @@ def my_attempts(
 def list_locations(
     location_type: str | None = Query(default=None, description="Фильтр по типу"),
     city: str | None = Query(default=None, description="Фильтр по городу"),
-    include_inactive: bool = Query(default=False, description="Включая неактивные"),
+    is_active: bool | None = Query(default=None, description="Фильтр по статусу"),
+    search: str | None = Query(default=None, description="Поиск по названию или адресу"),
+    include_inactive: bool = Query(default=True, description="Включая неактивные"),
     db: Session = Depends(get_db),
 ):
-    """Список подразделений. Публичный эндпоинт (для бота)."""
+    """Список подразделений с фильтрами"""
     query = db.query(Location)
 
-    if not include_inactive:
+    if not include_inactive and is_active is None:
         query = query.filter(Location.is_active.is_(True))
+    elif is_active is not None:
+        query = query.filter(Location.is_active == is_active)
 
     if location_type:
         query = query.filter(Location.location_type == location_type)
@@ -1785,8 +1789,16 @@ def list_locations(
     if city:
         query = query.filter(Location.city == city)
 
-    return query.order_by(Location.sort_order, Location.city, Location.name).all()
+    if search:
+        query = query.filter(
+            or_(
+                Location.name.ilike(f"%{search}%"),
+                Location.address.ilike(f"%{search}%"),
+                Location.city.ilike(f"%{search}%"),
+            )
+        )
 
+    return query.order_by(Location.sort_order, Location.city, Location.name).all()
 
 @router.get("/locations/types", response_model=list[str])
 def list_location_types(db: Session = Depends(get_db)):
