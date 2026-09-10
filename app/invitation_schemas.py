@@ -48,3 +48,8 @@ class InvitationRead(BaseModel):
     rejected_at: Optional[datetime]
     reject_reason: Optional[str]
     created_at: datetime
+    location_id: Optional[UUID] = None
+    location_name: Optional[str] = None
+    location_address: Optional[str] = None
+    location_city: Optional[str] = None
+    location_type: Optional[str] = None

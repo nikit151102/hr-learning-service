@@ -23,7 +23,7 @@ from app.services.invitation_service import (
 from app.models import User
 from app.schemas import Page
 from app.services.max_notification_service import max_notification_service
-
+from app.models import Invitation, InvitationStatus, Location, User
 
 router = APIRouter(prefix="/invitations", tags=["Приглашения"])
 
@@ -64,7 +64,6 @@ def get_my_invitation_endpoint(
     invitation = get_invitation_by_id_max(db, id_max)
     return invitation
 
-
 @router.get(
     "",
     response_model=Page[InvitationRead],
@@ -85,7 +84,6 @@ def list_invitations_endpoint(
         "size": size,
     }
 
-
 @router.get(
     "/{invitation_id}",
     response_model=InvitationRead,
@@ -96,11 +94,24 @@ def get_invitation_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(HRRequired),
 ):
-    invitation = db.query(Invitation).filter(Invitation.id == invitation_id).first()
+    invitation = (
+        db.query(Invitation)
+        .outerjoin(Location, Invitation.location_id == Location.id)
+        .filter(Invitation.id == invitation_id)
+        .first()
+    )
+    
     if not invitation:
         raise HTTPException(status_code=404, detail="Приглашение не найдено")
-    return invitation
 
+    result = InvitationRead.model_validate(invitation).model_dump()
+    if invitation.location:
+        result["location_name"] = invitation.location.name
+        result["location_address"] = invitation.location.address
+        result["location_city"] = invitation.location.city
+        result["location_type"] = invitation.location.location_type.value
+
+    return result
 
 @router.post(
     "/{invitation_id}/approve",

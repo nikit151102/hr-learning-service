@@ -7,8 +7,9 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.invitation_models import Invitation, InvitationStatus
-from app.models import User, UserRole, Location, LocationType
+from app.models import User, UserRole, LocationType
 from uuid import UUID
+from app.models import Invitation, InvitationStatus, Location, User
 
 def generate_invitation_code() -> str:
     return secrets.token_urlsafe(32)
@@ -205,7 +206,10 @@ def list_invitations(
     status: Optional[InvitationStatus] = None,
     page: int = 1,
     size: int = 20,
-) -> tuple[list[Invitation], int]:
+) -> tuple[list[dict], int]:
+    """Возвращает приглашения с информацией о подразделении"""
+    from app.models import Invitation, Location
+
     query = db.query(Invitation)
 
     if status:
@@ -213,11 +217,42 @@ def list_invitations(
 
     total = query.count()
 
-    invitations = (
-        query.order_by(Invitation.created_at.desc())
+    items = (
+        query
+        .outerjoin(Location, Invitation.location_id == Location.id)
+        .order_by(Invitation.created_at.desc())
         .offset((page - 1) * size)
         .limit(size)
         .all()
     )
 
-    return invitations, total
+    # Обогащаем каждый объект информацией о подразделении
+    enriched = []
+    for inv in items:
+        inv_dict = {
+            "id": inv.id,
+            "email": inv.email,
+            "id_max": inv.id_max,
+            "full_name": inv.full_name,
+            "invitation_code": inv.invitation_code,
+            "status": inv.status,
+            "requested_by_id_max": inv.requested_by_id_max,
+            "approved_by": inv.approved_by,
+            "role": inv.role,
+            "department": inv.department,
+            "expires_at": inv.expires_at,
+            "approved_at": inv.approved_at,
+            "accepted_at": inv.accepted_at,
+            "rejected_at": inv.rejected_at,
+            "reject_reason": inv.reject_reason,
+            "created_at": inv.created_at,
+            "updated_at": inv.updated_at,
+            "location_id": inv.location_id,
+            "location_name": inv.location.name if inv.location else None,
+            "location_address": inv.location.address if inv.location else None,
+            "location_city": inv.location.city if inv.location else None,
+            "location_type": inv.location.location_type.value if inv.location else None,
+        }
+        enriched.append(inv_dict)
+
+    return enriched, total
