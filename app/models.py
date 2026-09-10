@@ -100,6 +100,11 @@ class User(Base):
         index=True,
     )
     
+    location: Mapped[Optional["Location"]] = relationship(
+        "Location",
+        foreign_keys=[location_id],
+    )
+
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
