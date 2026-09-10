@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.invitation_models import Invitation, InvitationStatus
 from app.models import User, UserRole, LocationType
 from uuid import UUID
-from app.models import Invitation, InvitationStatus, Location, User
+from app.models import Location, User
 
 def generate_invitation_code() -> str:
     return secrets.token_urlsafe(32)

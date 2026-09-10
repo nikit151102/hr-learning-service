@@ -23,7 +23,7 @@ from app.services.invitation_service import (
 from app.models import User
 from app.schemas import Page
 from app.services.max_notification_service import max_notification_service
-from app.models import Invitation, InvitationStatus, Location, User
+from app.models import Location, User
 
 router = APIRouter(prefix="/invitations", tags=["Приглашения"])
 
