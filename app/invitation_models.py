@@ -35,6 +35,15 @@ class Invitation(Base):
         String(128), unique=True, index=True, nullable=False
     )
 
+    
+    location_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    location = relationship("Location", foreign_keys=[location_id])
+    
     status: Mapped[InvitationStatus] = mapped_column(
         SAEnum(InvitationStatus, native_enum=False, length=30),
         default=InvitationStatus.pending,

@@ -45,8 +45,8 @@ def request_invitation_endpoint(
         full_name=payload.full_name,
         id_max=payload.id_max,
         requested_by_id_max=payload.id_max,
+        location_id=payload.location_id, 
         role=payload.role,
-        department=payload.department,
         expires_in_days=payload.expires_in_days,
     )
 

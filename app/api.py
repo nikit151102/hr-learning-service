@@ -75,7 +75,7 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services import category_service, minio_service, test_service
-
+from app.models import Location, LocationType
 
 router = APIRouter(prefix="/api/v1")
 
@@ -1624,3 +1624,97 @@ def my_attempts(
     )
 
     return paginate(query, page, size)
+
+# ==================== LOCATIONS ====================
+
+@router.get("/locations", response_model=list[LocationRead])
+def list_locations(
+    location_type: str | None = Query(default=None, description="Фильтр по типу"),
+    city: str | None = Query(default=None, description="Фильтр по городу"),
+    include_inactive: bool = Query(default=False, description="Включая неактивные"),
+    db: Session = Depends(get_db),
+):
+    """Список подразделений. Публичный эндпоинт (для бота)."""
+    query = db.query(Location)
+
+    if not include_inactive:
+        query = query.filter(Location.is_active.is_(True))
+
+    if location_type:
+        query = query.filter(Location.location_type == location_type)
+
+    if city:
+        query = query.filter(Location.city == city)
+
+    return query.order_by(Location.sort_order, Location.city, Location.name).all()
+
+
+@router.get("/locations/types", response_model=list[str])
+def list_location_types(db: Session = Depends(get_db)):
+    """Доступные типы подразделений с количеством активных."""
+    types = [
+        {"value": "office", "label": "Офис"},
+        {"value": "warehouse", "label": "Склад"},
+        {"value": "store", "label": "Магазин"},
+    ]
+    return types
+
+
+@router.get("/locations/cities", response_model=list[str])
+def list_location_cities(
+    location_type: str = Query(..., description="Тип подразделения"),
+    db: Session = Depends(get_db),
+):
+    """Список городов для выбранного типа подразделения."""
+    cities = (
+        db.query(Location.city)
+        .filter(
+            Location.location_type == location_type,
+            Location.is_active.is_(True),
+        )
+        .distinct()
+        .order_by(Location.city)
+        .all()
+    )
+    return [c[0] for c in cities]
+
+
+@router.post("/locations", response_model=LocationRead, status_code=201)
+def create_location(
+    payload: LocationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    location = Location(**payload.model_dump())
+    db.add(location)
+    db.commit()
+    db.refresh(location)
+    return location
+
+
+@router.patch("/locations/{location_id}", response_model=LocationRead)
+def update_location(
+    location_id: UUID,
+    payload: LocationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    location = get_or_404(db, Location, location_id)
+    data = payload.model_dump(exclude_unset=True)
+    for key, value in data.items():
+        setattr(location, key, value)
+    db.commit()
+    db.refresh(location)
+    return location
+
+
+@router.delete("/locations/{location_id}", status_code=204)
+def delete_location(
+    location_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(HRRequired),
+):
+    location = get_or_404(db, Location, location_id)
+    db.delete(location)
+    db.commit()
+    return None

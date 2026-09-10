@@ -11,6 +11,7 @@ class InvitationRequest(BaseModel):
     email: EmailStr
     id_max: str
     full_name: str
+    location_id: Optional[UUID] = None
     role: str = "employee"
     department: Optional[str] = None
     expires_in_days: int = Field(default=7, ge=1, le=30)
@@ -37,6 +38,9 @@ class InvitationRead(BaseModel):
     requested_by_id_max: Optional[str]
     approved_by: Optional[UUID]
     role: str
+    location_id: Optional[UUID] = None  
+    location_name: Optional[str] = None  
+    location_address: Optional[str] = None 
     department: Optional[str]
     expires_at: datetime
     approved_at: Optional[datetime]

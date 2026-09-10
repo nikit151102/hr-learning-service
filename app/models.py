@@ -47,7 +47,37 @@ class AttemptStatus(str, enum.Enum):
     completed = "completed"
     canceled = "canceled"
 
+class LocationType(str, enum.Enum):
+    office = "office"        # Офис
+    warehouse = "warehouse"  # Склад
+    store = "store"          # Магазин
 
+
+class Location(Base):
+    __tablename__ = "locations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+
+    location_type: Mapped[LocationType] = mapped_column(
+        SAEnum(LocationType, native_enum=False, length=20),
+        default=LocationType.office,
+        index=True,
+    )
+
+    name: Mapped[str] = mapped_column(String(255))
+    city: Mapped[str] = mapped_column(String(255), index=True)
+    address: Mapped[str] = mapped_column(String(512))
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    
 class User(Base):
     __tablename__ = "users"
 

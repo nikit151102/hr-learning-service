@@ -20,6 +20,7 @@ def request_invitation(
     full_name: str,
     id_max: str,
     requested_by_id_max: str,
+    location_id: Optional[UUID] = None, 
     role: str = "employee",
     department: Optional[str] = None,
     expires_in_days: int = 7,
@@ -55,22 +56,29 @@ def request_invitation(
     invitation_code = generate_invitation_code()
     expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
 
+    if location_id:
+        location = db.query(Location).filter(
+            Location.id == location_id,
+            Location.is_active.is_(True)
+        ).first()
+        if not location:
+            raise HTTPException(status_code=404, detail="Подразделение не найдено")
+
     invitation = Invitation(
         email=email,
         id_max=id_max,
         full_name=full_name,
-        invitation_code=invitation_code,
+        invitation_code=generate_invitation_code(),
         status=InvitationStatus.pending,
         requested_by_id_max=requested_by_id_max,
+        location_id=location_id,  # ← сохраняем
         role=role,
-        department=department,
-        expires_at=expires_at,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=expires_in_days),
     )
 
     db.add(invitation)
     db.commit()
     db.refresh(invitation)
-
     return invitation
 
 
