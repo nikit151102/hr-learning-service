@@ -1195,6 +1195,8 @@ def update_answer(
     return answer
 
 
+from sqlalchemy import cast, Text
+
 @router.delete("/answers/{answer_id}", status_code=204)
 def delete_answer(
     answer_id: UUID,
@@ -1213,13 +1215,13 @@ def delete_answer(
     test = question.test
 
     # Проверяем, использовался ли ответ в попытках
+    # Приводим JSON к тексту, чтобы работал LIKE
     used_in_attempts = (
         db.query(func.count(TestAttemptAnswer.id))
+        .join(TestAttempt, TestAttemptAnswer.attempt_id == TestAttempt.id)
         .filter(
-            TestAttemptAnswer.attempt_id.in_(
-                db.query(TestAttempt.id).filter(TestAttempt.test_id == test.id)
-            ),
-            TestAttemptAnswer.selected_option_ids.contains([str(answer_id)])
+            TestAttempt.test_id == test.id,
+            cast(TestAttemptAnswer.selected_option_ids, Text).contains(str(answer_id))
         )
         .scalar()
         or 0
@@ -1251,7 +1253,7 @@ def delete_answer(
         raise HTTPException(status_code=409, detail="Conflict")
 
     return None
-
+    
 
 # ==================== GRADES ====================
 
