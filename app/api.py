@@ -515,14 +515,11 @@ def view_material(
 def download_material(
     material_id: UUID,
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     material = get_or_404(db, Material, material_id)
 
-    if not material.is_published and current_user.role not in (
-        UserRole.hr,
-        UserRole.admin,
-    ):
+    if not material.is_published:
         raise HTTPException(status_code=404, detail="Material not found")
 
     if material.file_id and material.file:
