@@ -511,22 +511,53 @@ def view_material(
     return {"ok": True}
 
 
+from fastapi.responses import StreamingResponse
+from io import BytesIO
+
 @router.get("/materials/{material_id}/download")
 def download_material(
     material_id: UUID,
     db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
+    """Скачивание материала — проксирует файл через API"""
     material = get_or_404(db, Material, material_id)
 
-    if not material.is_published:
+    # Проверка публикации и прав доступа
+    if not material.is_published and current_user.role not in (
+        UserRole.hr,
+        UserRole.admin,
+    ):
         raise HTTPException(status_code=404, detail="Material not found")
 
+    # === Скачивание из MinIO ===
     if material.file_id and material.file:
-        url = minio_service.presigned_url(material.file.object_key)
-        return RedirectResponse(url)
+        try:
+            # Получаем объект из MinIO
+            response = minio_service.client.get_object(
+                material.file.bucket,
+                material.file.object_key,
+            )
 
+            # Определяем имя файла для скачивания
+            filename = material.file.original_filename or "download"
+            
+            # Возвращаем поток байт с правильными заголовками
+            return StreamingResponse(
+                response,
+                media_type=material.file.content_type or "application/octet-stream",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Content-Length": str(material.file.size),
+                },
+            )
+        except Exception as e:
+            logger.error(f"Ошибка скачивания из MinIO: {e}")
+            raise HTTPException(status_code=500, detail="Ошибка скачивания файла")
+
+    # === Внешняя ссылка ===
     if material.external_url:
+        # Для внешних URL редирект нормальный — они публичные
         return RedirectResponse(material.external_url)
 
     raise HTTPException(status_code=404, detail="Material has no source")
