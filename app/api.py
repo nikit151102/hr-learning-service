@@ -511,12 +511,43 @@ def view_material(
     return {"ok": True}
 
 
+
 import logging
+import os
 from urllib.parse import quote
 from fastapi.responses import StreamingResponse, RedirectResponse
 from minio.error import S3Error
 
 logger = logging.getLogger(__name__)
+
+
+def _get_extension(filename: str) -> str:
+    """Извлекает расширение файла"""
+    if "." in filename:
+        return "." + filename.rsplit(".", 1)[-1].lower()
+    return ""
+
+
+def _build_content_disposition(original_filename: str) -> str:
+    """
+    Формирует заголовок Content-Disposition по RFC 6266 / RFC 5987.
+    Полностью безопасен для кириллицы и спецсимволов.
+    """
+    # Расширение файла
+    ext = _get_extension(original_filename)
+
+    # ASCII-версия для старых браузеров (fallback)
+    ascii_filename = f"download{ext}" if ext else "download"
+
+    # URL-кодированная версия для современных браузеров
+    # Используем quote с безопасными символами
+    utf8_filename = quote(original_filename, safe=".-_() ")
+
+    # Формат: сначала ASCII (fallback), потом UTF-8 (современный)
+    return (
+        f'attachment; filename="{ascii_filename}"; '
+        f"filename*=UTF-8''{utf8_filename}"
+    )
 
 
 @router.get("/materials/{material_id}/download")
@@ -533,36 +564,29 @@ def download_material(
 
     # === Скачивание из MinIO ===
     if material.file_id and material.file:
-        logger.info(f"Скачивание файла: bucket={material.file.bucket}, key={material.file.object_key}")
-
         try:
             minio_client = minio_service.client
             if not minio_client:
-                raise HTTPException(status_code=500, detail="MinIO не настроен")
+                raise HTTPException(status_code=500, detail="Storage not configured")
 
+            # Получаем объект из MinIO
             response = minio_client.get_object(
                 material.file.bucket,
                 material.file.object_key,
             )
 
-            logger.info(f"Файл получен из MinIO, размер: {material.file.size}")
-
-            # === ИСПРАВЛЕНИЕ: безопасное имя файла с кириллицей ===
+            # === Безопасное формирование имени файла ===
             original_filename = material.file.original_filename or "download"
-            
-            # ASCII-версия для fallback (необязательна, но рекомендуется)
-            ascii_filename = "download" + _get_extension(original_filename)
-            
-            # URL-кодированная версия для UTF-8 (RFC 5987)
-            utf8_filename = quote(original_filename, safe="")
-            
-            # Формируем заголовок Content-Disposition по RFC 6266
-            disposition = (
-                f'attachment; filename="{ascii_filename}"; '
-                f"filename*=UTF-8''{utf8_filename}"
-            )
+            disposition = _build_content_disposition(original_filename)
 
-            # Генератор с автоматическим закрытием потока
+            # === Безопасный media_type (только ASCII) ===
+            content_type = material.file.content_type or "application/octet-stream"
+            # Убираем потенциально опасные символы из media_type
+            content_type = "".join(
+                c for c in content_type if ord(c) < 128
+            ) or "application/octet-stream"
+
+            # === Генератор с автозакрытием потока ===
             def iter_chunks():
                 try:
                     while True:
@@ -570,39 +594,50 @@ def download_material(
                         if not chunk:
                             break
                         yield chunk
+                except Exception as read_error:
+                    logger.error(f"Read error: {type(read_error).__name__}")
                 finally:
-                    response.close()
-                    response.release_conn()
+                    try:
+                        response.close()
+                        response.release_conn()
+                    except Exception:
+                        pass
+
+            # Логируем БЕЗ кириллицы
+            logger.info(
+                f"File download: material={material_id}, size={material.file.size}"
+            )
 
             return StreamingResponse(
                 iter_chunks(),
-                media_type=material.file.content_type or "application/octet-stream",
+                media_type=content_type,
                 headers={
                     "Content-Disposition": disposition,
                     "Content-Length": str(material.file.size),
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
                 },
             )
 
         except S3Error as e:
-            logger.error(f"Ошибка MinIO S3: {e}")
-            raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
+            logger.error(f"MinIO S3 error: {e.code if hasattr(e, 'code') else 'unknown'}")
+            raise HTTPException(status_code=404, detail="File not found in storage")
+
+        except HTTPException:
+            # Пробрасываем наши ошибки как есть
+            raise
+
         except Exception as e:
-            logger.error(f"Ошибка скачивания из MinIO: {type(e).__name__}: {e}")
-            raise HTTPException(status_code=500, detail=f"Ошибка скачивания файла: {str(e)}")
+            # Логируем тип ошибки БЕЗ кириллицы в сообщении
+            logger.error(f"Download error: {type(e).__name__}")
+            raise HTTPException(status_code=500, detail="File download failed")
 
     # === Внешняя ссылка ===
     if material.external_url:
         return RedirectResponse(material.external_url)
 
     raise HTTPException(status_code=404, detail="Material has no source")
-
-
-def _get_extension(filename: str) -> str:
-    """Извлекает расширение файла"""
-    if "." in filename:
-        return "." + filename.rsplit(".", 1)[-1].lower()
-    return ""
 
 
 @router.patch("/materials/{material_id}", response_model=MaterialRead)
