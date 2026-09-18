@@ -512,10 +512,12 @@ def view_material(
 
 
 import logging
+from urllib.parse import quote
 from fastapi.responses import StreamingResponse, RedirectResponse
 from minio.error import S3Error
 
 logger = logging.getLogger(__name__)
+
 
 @router.get("/materials/{material_id}/download")
 def download_material(
@@ -532,12 +534,10 @@ def download_material(
     # === Скачивание из MinIO ===
     if material.file_id and material.file:
         logger.info(f"Скачивание файла: bucket={material.file.bucket}, key={material.file.object_key}")
-        
+
         try:
-            # Получаем объект из MinIO
             minio_client = minio_service.client
             if not minio_client:
-                logger.error("MinIO client не инициализирован")
                 raise HTTPException(status_code=500, detail="MinIO не настроен")
 
             response = minio_client.get_object(
@@ -547,18 +547,43 @@ def download_material(
 
             logger.info(f"Файл получен из MinIO, размер: {material.file.size}")
 
-            # Определяем имя файла для скачивания
-            filename = material.file.original_filename or "download"
+            # === ИСПРАВЛЕНИЕ: безопасное имя файла с кириллицей ===
+            original_filename = material.file.original_filename or "download"
             
-            # Возвращаем поток байт с правильными заголовками
+            # ASCII-версия для fallback (необязательна, но рекомендуется)
+            ascii_filename = "download" + _get_extension(original_filename)
+            
+            # URL-кодированная версия для UTF-8 (RFC 5987)
+            utf8_filename = quote(original_filename, safe="")
+            
+            # Формируем заголовок Content-Disposition по RFC 6266
+            disposition = (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{utf8_filename}"
+            )
+
+            # Генератор с автоматическим закрытием потока
+            def iter_chunks():
+                try:
+                    while True:
+                        chunk = response.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    response.close()
+                    response.release_conn()
+
             return StreamingResponse(
-                response,
+                iter_chunks(),
                 media_type=material.file.content_type or "application/octet-stream",
                 headers={
-                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Content-Disposition": disposition,
                     "Content-Length": str(material.file.size),
+                    "Cache-Control": "no-cache",
                 },
             )
+
         except S3Error as e:
             logger.error(f"Ошибка MinIO S3: {e}")
             raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
@@ -571,6 +596,14 @@ def download_material(
         return RedirectResponse(material.external_url)
 
     raise HTTPException(status_code=404, detail="Material has no source")
+
+
+def _get_extension(filename: str) -> str:
+    """Извлекает расширение файла"""
+    if "." in filename:
+        return "." + filename.rsplit(".", 1)[-1].lower()
+    return ""
+
 
 @router.patch("/materials/{material_id}", response_model=MaterialRead)
 def update_material(
