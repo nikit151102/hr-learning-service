@@ -518,16 +518,12 @@ from io import BytesIO
 def download_material(
     material_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """Скачивание материала — проксирует файл через API"""
     material = get_or_404(db, Material, material_id)
 
     # Проверка публикации и прав доступа
-    if not material.is_published and current_user.role not in (
-        UserRole.hr,
-        UserRole.admin,
-    ):
+    if not material.is_published:
         raise HTTPException(status_code=404, detail="Material not found")
 
     # === Скачивание из MinIO ===
