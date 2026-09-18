@@ -548,7 +548,6 @@ def download_material(
                 },
             )
         except Exception as e:
-            logger.error(f"Ошибка скачивания из MinIO: {e}")
             raise HTTPException(status_code=500, detail="Ошибка скачивания файла")
 
     # === Внешняя ссылка ===
