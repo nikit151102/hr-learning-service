@@ -511,8 +511,11 @@ def view_material(
     return {"ok": True}
 
 
-from fastapi.responses import StreamingResponse
-from io import BytesIO
+import logging
+from fastapi.responses import StreamingResponse, RedirectResponse
+from minio.error import S3Error
+
+logger = logging.getLogger(__name__)
 
 @router.get("/materials/{material_id}/download")
 def download_material(
@@ -522,18 +525,27 @@ def download_material(
     """Скачивание материала — проксирует файл через API"""
     material = get_or_404(db, Material, material_id)
 
-    # Проверка публикации и прав доступа
+    # Проверка публикации
     if not material.is_published:
         raise HTTPException(status_code=404, detail="Material not found")
 
     # === Скачивание из MinIO ===
     if material.file_id and material.file:
+        logger.info(f"Скачивание файла: bucket={material.file.bucket}, key={material.file.object_key}")
+        
         try:
             # Получаем объект из MinIO
-            response = minio_service.client.get_object(
+            minio_client = minio_service.client
+            if not minio_client:
+                logger.error("MinIO client не инициализирован")
+                raise HTTPException(status_code=500, detail="MinIO не настроен")
+
+            response = minio_client.get_object(
                 material.file.bucket,
                 material.file.object_key,
             )
+
+            logger.info(f"Файл получен из MinIO, размер: {material.file.size}")
 
             # Определяем имя файла для скачивания
             filename = material.file.original_filename or "download"
@@ -547,16 +559,18 @@ def download_material(
                     "Content-Length": str(material.file.size),
                 },
             )
+        except S3Error as e:
+            logger.error(f"Ошибка MinIO S3: {e}")
+            raise HTTPException(status_code=404, detail="Файл не найден в хранилище")
         except Exception as e:
-            raise HTTPException(status_code=500, detail="Ошибка скачивания файла")
+            logger.error(f"Ошибка скачивания из MinIO: {type(e).__name__}: {e}")
+            raise HTTPException(status_code=500, detail=f"Ошибка скачивания файла: {str(e)}")
 
     # === Внешняя ссылка ===
     if material.external_url:
-        # Для внешних URL редирект нормальный — они публичные
         return RedirectResponse(material.external_url)
 
     raise HTTPException(status_code=404, detail="Material has no source")
-
 
 @router.patch("/materials/{material_id}", response_model=MaterialRead)
 def update_material(
