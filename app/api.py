@@ -515,7 +515,7 @@ def view_material(
 def download_material(
     material_id: UUID,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    # current_user: User = Depends(get_current_user),
 ):
     material = get_or_404(db, Material, material_id)
 
